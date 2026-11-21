@@ -53,6 +53,7 @@ export class ElementHandleDispatcher extends JSHandleDispatcher<FrameDispatcher>
   private constructor(scope: FrameDispatcher, elementHandle: ElementHandle) {
     super(scope, elementHandle);
     this._elementHandle = elementHandle;
+    elementHandle._initializePreview().catch(() => {});
   }
 
   async ownerFrame(params: channels.ElementHandleOwnerFrameParams, progress: Progress): Promise<channels.ElementHandleOwnerFrameResult> {

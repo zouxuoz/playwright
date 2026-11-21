@@ -211,13 +211,17 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
     if (!params.patterns.length) {
       // Note: it is important to remove the interceptor when there are no patterns,
       // because that disables the slow-path interception in the browser itself.
+      this._interceptionUrlMatchers = [];
+      this._page._setDispatcherInterceptionPatterns([]);
       if (hadMatchers)
         await progress.race(this._page.removeRequestInterceptor(this._requestInterceptor));
-      this._interceptionUrlMatchers = [];
     } else {
       this._interceptionUrlMatchers = params.patterns.map(deserializeURLMatch);
+      this._page._setDispatcherInterceptionPatterns(this._interceptionUrlMatchers);
       if (!hadMatchers)
         await this._page.addRequestInterceptor(progress, this._requestInterceptor);
+      else
+        await progress.race(this._page.delegate.updateRequestInterception());
     }
   }
 

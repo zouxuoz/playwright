@@ -59,20 +59,32 @@ export class Dispatcher {
   }
 
   private _findFirstJobToRun() {
-    // Always pick the first job that can be run while respecting the project worker limit.
+    const hasRunningJobs = this._workerSlots.some(w => !!w.jobDispatcher);
+    const idleHashes = new Set<string>();
+    for (const w of this._workerSlots) {
+      if (!w.jobDispatcher && w.worker && !w.worker.didSendStop())
+        idleHashes.add(w.worker.hash());
+    }
+    // Prefer a runnable job whose workerHash matches an already-idle warm worker,
+    // falling back to the first runnable job when none match.
+    let fallbackIndex = -1;
     for (let index = 0; index < this._queue.length; index++) {
       const job = this._queue[index];
       // Isolated retries only run one at a time, after all other jobs have finished.
-      if (this._isolatedJobs.has(job) && this._workerSlots.some(w => !!w.jobDispatcher))
+      if (this._isolatedJobs.has(job) && hasRunningJobs)
         continue;
       const projectIdWorkerLimit = this._workerLimitPerProjectId.get(job.projectId);
-      if (!projectIdWorkerLimit)
+      if (projectIdWorkerLimit) {
+        const runningWorkersWithSameProjectId = this._workerSlots.filter(w => w.jobDispatcher?.job.projectId === job.projectId).length;
+        if (runningWorkersWithSameProjectId >= projectIdWorkerLimit)
+          continue;
+      }
+      if (!idleHashes.size || idleHashes.has(job.workerHash))
         return index;
-      const runningWorkersWithSameProjectId = this._workerSlots.filter(w => w.jobDispatcher?.job.projectId === job.projectId).length;
-      if (runningWorkersWithSameProjectId < projectIdWorkerLimit)
-        return index;
+      if (fallbackIndex === -1)
+        fallbackIndex = index;
     }
-    return -1;
+    return fallbackIndex;
   }
 
   private _scheduleJob() {
@@ -118,8 +130,10 @@ export class Dispatcher {
     const job = jobDispatcher.job;
 
     // 0. Perhaps skip the whole job?
-    if (jobDispatcher.skipWholeJob())
+    if (jobDispatcher.skipWholeJob()) {
+      this._updateCounterForWorkerHash(job.workerHash, -1);
       return;
+    }
 
     let worker = this._workerSlots[index].worker;
 
@@ -201,7 +215,8 @@ export class Dispatcher {
 
   async run(testGroups: TestGroup[], extraEnvByProjectId: EnvByProjectId) {
     this._extraEnvByProjectId = extraEnvByProjectId;
-    this._queue = testGroups;
+    // Schedule larger test groups first (LPT heuristic) to reduce multi-worker tail stragglers.
+    this._queue = testGroups.length > 1 ? [...testGroups].sort((a, b) => b.tests.length - a.tests.length) : testGroups;
     for (const group of testGroups)
       this._updateCounterForWorkerHash(group.workerHash, +1);
     this._isStopped = false;

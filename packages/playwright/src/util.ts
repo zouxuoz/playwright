@@ -347,8 +347,20 @@ export function resolveImportSpecifierAfterMapping(resolved: string, afterPathMa
   }
 }
 
+const statKindCache = new Map<string, 'file' | 'dir' | 'none'>();
+
+function statKind(resolved: string): 'file' | 'dir' | 'none' {
+  let kind = statKindCache.get(resolved);
+  if (kind !== undefined)
+    return kind;
+  const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+  kind = stat ? (stat.isFile() ? 'file' : stat.isDirectory() ? 'dir' : 'none') : 'none';
+  statKindCache.set(resolved, kind);
+  return kind;
+}
+
 function fileExists(resolved: string) {
-  return fs.statSync(resolved, { throwIfNoEntry: false })?.isFile();
+  return statKind(resolved) === 'file';
 }
 
 export async function fileExistsAsync(resolved: string) {
@@ -361,7 +373,7 @@ export async function fileExistsAsync(resolved: string) {
 }
 
 function dirExists(resolved: string) {
-  return fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory();
+  return statKind(resolved) === 'dir';
 }
 
 export async function removeDirAndLogToConsole(dir: string) {

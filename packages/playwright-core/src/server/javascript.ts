@@ -102,7 +102,7 @@ export class ExecutionContext extends SdkObject {
     return null;
   }
 
-  private _utilityScript(): Promise<JSHandle<UtilityScript>> {
+  protected _utilityScript(): Promise<JSHandle<UtilityScript>> {
     if (!this._utilityScriptPromise) {
       const globalsSnapshot = this._noUtilityWorld ? mainWorldGlobalsSnapshotSource : '';
       const source = `

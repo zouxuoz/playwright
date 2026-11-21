@@ -107,6 +107,7 @@ export class TestInfoImpl implements TestInfo {
   _hasNonRetriableError = false;
   _hasUnhandledError = false;
   _allowSkips = false;
+  _didFinishTestFunctionAndAfterEachHooks = false;
 
   // ------------ Main methods ------------
   skip: (arg?: any, description?: string) => void;

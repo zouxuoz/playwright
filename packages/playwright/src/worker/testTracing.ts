@@ -50,6 +50,7 @@ export class TestTracing {
   private _tracesDir: string;
   private _contextCreatedEvent: trace.ContextCreatedTraceEvent;
   private _didFinishTestFunctionAndAfterEachHooks = false;
+  private _disabled = false;
 
   constructor(testInfo: TestInfoImpl, artifactsDir: string) {
     this._testInfo = testInfo;
@@ -106,6 +107,8 @@ export class TestTracing {
 
     if (!this._shouldCaptureTrace()) {
       this._options = undefined;
+      this._disabled = true;
+      this._traceEvents.length = 0;
       return;
     }
 
@@ -249,6 +252,8 @@ export class TestTracing {
   }
 
   appendForError(error: TestInfoError) {
+    if (this._disabled)
+      return;
     const rawStack = error.stack?.split('\n') || [];
     const stack = rawStack ? filteredStackTrace(rawStack) : [];
     this._appendTraceEvent({
@@ -266,6 +271,8 @@ export class TestTracing {
   }
 
   appendStdioToTrace(type: 'stdout' | 'stderr', chunk: string | Buffer) {
+    if (this._disabled)
+      return;
     this._appendTraceEvent({
       type,
       timestamp: monotonicTime(),
@@ -275,6 +282,8 @@ export class TestTracing {
   }
 
   appendBeforeActionForStep(options: { stepId: string, parentId?: string, title: string, category: TestStepCategory, params?: Record<string, any>, stack: StackFrame[], group?: string }) {
+    if (this._disabled)
+      return;
     this._appendTraceEvent({
       type: 'before',
       callId: options.stepId,
@@ -291,6 +300,8 @@ export class TestTracing {
   }
 
   appendAfterActionForStep(callId: string, error?: trace.SerializedError['error'], attachments: Attachment[] = [], annotations?: trace.AfterActionTraceEventAnnotation[]) {
+    if (this._disabled)
+      return;
     this._appendTraceEvent({
       type: 'after',
       callId,
@@ -342,6 +353,8 @@ function generatePreview(value: any, visited = new Set<any>()): string {
   return String(value);
 }
 
+const kUncompressibleExtensions = new Set(['.jpeg', '.jpg', '.png', '.webp', '.gif', '.woff2', '.webm', '.mp4', '.gz', '.br', '.zip']);
+
 async function mergeTraceFiles(fileName: string, temporaryTraceFiles: string[]) {
   temporaryTraceFiles = temporaryTraceFiles.filter(file => fs.existsSync(file));
   if (temporaryTraceFiles.length === 1) {
@@ -383,7 +396,9 @@ async function mergeTraceFiles(fileName: string, temporaryTraceFiles: string[]) 
             promise.reject(err);
             return;
           }
-          zipFile.addReadStream(readStream!, entryName);
+          const ext = path.extname(entryName).toLowerCase();
+          const compress = !kUncompressibleExtensions.has(ext);
+          zipFile.addReadStream(readStream!, entryName, { compress });
           if (--pendingEntries === 0)
             promise.resolve();
         });

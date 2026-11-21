@@ -267,10 +267,23 @@ const validRoles: AriaRole[] = ['alert', 'alertdialog', 'application', 'article'
   'spinbutton', 'status', 'strong', 'subscript', 'superscript', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox', 'time', 'timer',
   'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem'];
 
+const validRolesSet = new Set<string>(validRoles);
+
 function getExplicitAriaRole(element: Element): AriaRole | null {
   // https://www.w3.org/TR/wai-aria-1.2/#document-handling_author-errors_roles
-  const roles = (element.getAttribute('role') || '').split(' ').map(role => role.trim());
-  return roles.find(role => validRoles.includes(role as any)) as AriaRole || null;
+  const roleAttr = element.getAttribute('role');
+  if (!roleAttr)
+    return null;
+  const trimmed = roleAttr.trim();
+  if (validRolesSet.has(trimmed))
+    return trimmed as AriaRole;
+  if (!trimmed.includes(' '))
+    return null;
+  for (const role of trimmed.split(' ')) {
+    if (role && validRolesSet.has(role))
+      return role as AriaRole;
+  }
+  return null;
 }
 
 function hasPresentationConflictResolution(element: Element, role: string | null) {

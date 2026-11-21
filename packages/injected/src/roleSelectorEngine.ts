@@ -17,6 +17,7 @@
 import { parseAttributeSelector } from '@isomorphic/selectorParser';
 import { normalizeWhiteSpace } from '@isomorphic/stringUtils';
 
+import { documentHasShadowRoots } from './selectorEvaluator';
 import { beginAriaCaches, endAriaCaches, getAriaChecked, getAriaDisabled, getAriaExpanded, getAriaLevel, getAriaPressed, getAriaRole, getAriaSelected, getElementAccessibleDescription, getElementAccessibleNameText, isElementHiddenForAria, kAriaCheckedRoles, kAriaExpandedRoles, kAriaLevelRoles, kAriaPressedRoles, kAriaSelectedRoles } from './roleUtils';
 import { matchesAttributePart } from './selectorUtils';
 
@@ -142,7 +143,17 @@ function validateAttributes(attrs: AttributeSelectorPart[], role: string): RoleE
 
 function queryRole(scope: SelectorRoot, options: RoleEngineOptions, internal: boolean): Element[] {
   const result: Element[] = [];
+  const normalizedName = typeof options.name === 'string' ? normalizeWhiteSpace(options.name) : options.name;
+  const nameOp = (internal && !options.nameExact && options.nameOp === '=') ? '*=' : (options.nameOp || '=');
+  const nameAttrPart = options.name !== undefined ? { name: '', jsonPath: [], op: nameOp, value: normalizedName, caseSensitive: !!options.nameExact } : undefined;
+  const normalizedDescription = typeof options.description === 'string' ? normalizeWhiteSpace(options.description) : options.description;
+  const descriptionOp = (internal && !options.descriptionExact && options.descriptionOp === '=') ? '*=' : (options.descriptionOp || '=');
+  const descriptionAttrPart = options.description !== undefined ? { name: '', jsonPath: [], op: descriptionOp, value: normalizedDescription, caseSensitive: !!options.descriptionExact } : undefined;
+  const implicitTagSet = kImplicitTagsForRole[options.role];
+
   const match = (element: Element) => {
+    if (implicitTagSet && !implicitTagSet.has(element.tagName) && !element.hasAttribute('role'))
+      return;
     if (getAriaRole(element) !== options.role)
       return;
     if (options.selected !== undefined && getAriaSelected(element) !== options.selected)
@@ -162,32 +173,31 @@ function queryRole(scope: SelectorRoot, options: RoleEngineOptions, internal: bo
       if (isHidden)
         return;
     }
-    if (options.name !== undefined) {
+    if (nameAttrPart) {
       // Always normalize whitespace in the accessible name.
       const accessibleName = normalizeWhiteSpace(getElementAccessibleNameText(element, !!options.includeHidden));
-      if (typeof options.name === 'string')
-        options.name = normalizeWhiteSpace(options.name);
-      // internal:role assumes that [name="foo"i] also means substring.
-      if (internal && !options.nameExact && options.nameOp === '=')
-        options.nameOp = '*=';
-      if (!matchesAttributePart(accessibleName, { name: '', jsonPath: [], op: options.nameOp || '=', value: options.name, caseSensitive: !!options.nameExact }))
+      if (!matchesAttributePart(accessibleName, nameAttrPart))
         return;
     }
-    if (options.description !== undefined) {
+    if (descriptionAttrPart) {
       // Always normalize whitespace in the accessible description.
       const accessibleDescription = normalizeWhiteSpace(getElementAccessibleDescription(element, !!options.includeHidden));
-      if (typeof options.description === 'string')
-        options.description = normalizeWhiteSpace(options.description);
-      // internal:role assumes that [description="foo"i] also means substring.
-      if (internal && !options.descriptionExact && options.descriptionOp === '=')
-        options.descriptionOp = '*=';
-      if (!matchesAttributePart(accessibleDescription, { name: '', jsonPath: [], op: options.descriptionOp || '=', value: options.description, caseSensitive: !!options.descriptionExact }))
+      if (!matchesAttributePart(accessibleDescription, descriptionAttrPart))
         return;
     }
     result.push(element);
   };
 
+  const doc = scope.nodeType === 9 ? (scope as Document) : scope.ownerDocument;
+  const mayHaveShadow = !doc || documentHasShadowRoots(doc);
+  const fastSelector = (!mayHaveShadow && implicitTagSet) ? [...implicitTagSet].join(',') + ',[role]' : undefined;
+
   const query = (root: Element | ShadowRoot | Document) => {
+    if (fastSelector) {
+      for (const element of root.querySelectorAll(fastSelector))
+        match(element);
+      return;
+    }
     const shadows: ShadowRoot[] = [];
     if ((root as Element).shadowRoot)
       shadows.push((root as Element).shadowRoot!);
@@ -202,6 +212,63 @@ function queryRole(scope: SelectorRoot, options: RoleEngineOptions, internal: bo
   query(scope);
   return result;
 }
+
+const kImplicitTagsForRole: Record<string, Set<string>> = {
+  article: new Set(['ARTICLE']),
+  banner: new Set(['HEADER']),
+  blockquote: new Set(['BLOCKQUOTE']),
+  button: new Set(['BUTTON', 'INPUT', 'SUMMARY']),
+  caption: new Set(['CAPTION']),
+  cell: new Set(['TD']),
+  checkbox: new Set(['INPUT']),
+  code: new Set(['CODE']),
+  columnheader: new Set(['TH']),
+  combobox: new Set(['SELECT', 'INPUT']),
+  complementary: new Set(['ASIDE']),
+  contentinfo: new Set(['FOOTER']),
+  definition: new Set(['DD']),
+  deletion: new Set(['DEL']),
+  dialog: new Set(['DIALOG']),
+  document: new Set(['HTML']),
+  emphasis: new Set(['EM']),
+  figure: new Set(['FIGURE']),
+  form: new Set(['FORM']),
+  gridcell: new Set(['TD']),
+  group: new Set(['DETAILS', 'FIELDSET', 'OPTGROUP']),
+  heading: new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']),
+  img: new Set(['IMG', 'SVG', 'svg']),
+  insertion: new Set(['INS']),
+  link: new Set(['A', 'AREA']),
+  list: new Set(['UL', 'OL', 'MENU']),
+  listbox: new Set(['SELECT', 'DATALIST']),
+  listitem: new Set(['LI']),
+  main: new Set(['MAIN']),
+  mark: new Set(['MARK']),
+  math: new Set(['MATH', 'math']),
+  meter: new Set(['METER']),
+  navigation: new Set(['NAV']),
+  option: new Set(['OPTION']),
+  paragraph: new Set(['P']),
+  progressbar: new Set(['PROGRESS']),
+  radio: new Set(['INPUT']),
+  region: new Set(['SECTION']),
+  row: new Set(['TR']),
+  rowgroup: new Set(['TBODY', 'THEAD', 'TFOOT']),
+  rowheader: new Set(['TH']),
+  search: new Set(['SEARCH']),
+  searchbox: new Set(['INPUT']),
+  separator: new Set(['HR']),
+  slider: new Set(['INPUT']),
+  spinbutton: new Set(['INPUT']),
+  status: new Set(['OUTPUT']),
+  strong: new Set(['STRONG']),
+  subscript: new Set(['SUB']),
+  superscript: new Set(['SUP']),
+  table: new Set(['TABLE']),
+  term: new Set(['DFN', 'DT']),
+  textbox: new Set(['INPUT', 'TEXTAREA']),
+  time: new Set(['TIME']),
+};
 
 export function createRoleEngine(internal: boolean): SelectorEngine {
   return {

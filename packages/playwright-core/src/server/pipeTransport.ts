@@ -57,8 +57,7 @@ export class PipeTransport implements ConnectionTransport {
   send(message: ProtocolRequest) {
     if (this._closed)
       throw new Error('Pipe has been closed');
-    this._pipeWrite.write(JSON.stringify(message));
-    this._pipeWrite.write('\0');
+    this._pipeWrite.write(JSON.stringify(message) + '\0');
   }
 
   close() {
@@ -66,29 +65,36 @@ export class PipeTransport implements ConnectionTransport {
   }
 
   _dispatch(buffer: Buffer) {
-    let end = buffer.indexOf('\0');
+    let end = buffer.indexOf(0);
     if (end === -1) {
       this._pendingBuffers.push(buffer);
       return;
     }
-    this._pendingBuffers.push(buffer.slice(0, end));
-    const message = Buffer.concat(this._pendingBuffers).toString();
+    let message: string;
+    if (this._pendingBuffers.length === 0) {
+      message = buffer.toString('utf8', 0, end);
+    } else {
+      this._pendingBuffers.push(buffer.subarray(0, end));
+      message = Buffer.concat(this._pendingBuffers).toString('utf8');
+      this._pendingBuffers = [];
+    }
     this._waitForNextTask(() => {
       if (this.onmessage)
         this.onmessage.call(null, JSON.parse(message));
     });
 
     let start = end + 1;
-    end = buffer.indexOf('\0', start);
+    end = buffer.indexOf(0, start);
     while (end !== -1) {
-      const message = buffer.toString(undefined, start, end);
+      const nextMessage = buffer.toString('utf8', start, end);
       this._waitForNextTask(() => {
         if (this.onmessage)
-          this.onmessage.call(null, JSON.parse(message));
+          this.onmessage.call(null, JSON.parse(nextMessage));
       });
       start = end + 1;
-      end = buffer.indexOf('\0', start);
+      end = buffer.indexOf(0, start);
     }
-    this._pendingBuffers = [buffer.slice(start)];
+    if (start < buffer.length)
+      this._pendingBuffers = [Buffer.from(buffer.subarray(start))];
   }
 }

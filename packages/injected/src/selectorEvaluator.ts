@@ -25,6 +25,29 @@ import type { CSSComplexSelector, CSSComplexSelectorList, CSSFunctionArgument, C
 import type { LayoutSelectorName } from './layoutSelectorUtils';
 import type { ElementText } from './selectorUtils';
 
+const kDocShadowState = new WeakMap<Document, { hasShadow: boolean }>();
+
+export function documentHasShadowRoots(doc: Document): boolean {
+  let state = kDocShadowState.get(doc);
+  if (state)
+    return state.hasShadow;
+  state = { hasShadow: false };
+  kDocShadowState.set(doc, state);
+  const onShadow = () => {
+    state!.hasShadow = true;
+  };
+  doc.addEventListener('__pw_sr__', onShadow, { once: true });
+  // One-time initial scan to detect any shadow roots attached before InjectedScript loaded
+  // (including declarative <template shadowrootmode>).
+  for (const el of doc.getElementsByTagName('*')) {
+    if (el.shadowRoot) {
+      state.hasShadow = true;
+      break;
+    }
+  }
+  return state.hasShadow;
+}
+
 type QueryContext = {
   scope: Element | Document;
   pierceShadow: boolean;
@@ -356,10 +379,14 @@ export class SelectorEvaluatorImpl implements SelectorEvaluator {
 
   _queryCSS(context: QueryContext, css: string): Element[] {
     return this._cached<Element[]>(this._cacheQueryCSS, css, [context.scope, context.pierceShadow, context.originalScope], () => {
-      let result: Element[] = [];
+      const result: Element[] = [];
+      const doc = context.scope.nodeType === 9 ? (context.scope as Document) : context.scope.ownerDocument;
+      const mayHaveShadow = context.pierceShadow && (!doc || documentHasShadowRoots(doc));
       function query(root: Element | ShadowRoot | Document) {
-        result = result.concat([...root.querySelectorAll(css)]);
-        if (!context.pierceShadow)
+        const matched = root.querySelectorAll(css);
+        for (let i = 0; i < matched.length; i++)
+          result.push(matched[i]);
+        if (!mayHaveShadow)
           return;
         if ((root as Element).shadowRoot)
           query((root as Element).shadowRoot!);

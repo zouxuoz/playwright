@@ -192,15 +192,18 @@ export abstract class ChannelOwner<T extends channels.Channel = channels.Channel
     if (existingApiZone)
       return await func(existingApiZone);
 
+    if (options?.internal) {
+      const apiZone: ApiZone = { title: options.title, apiName: '', frames: [], internal: true, reported: false, userData: undefined, stepId: undefined };
+      return await currentZone().with('apiZone', apiZone).run(() => func(apiZone));
+    }
+
     const stackTrace = captureLibraryStackTrace();
-    const apiZone: ApiZone = { title: options?.title, apiName: stackTrace.apiName, frames: stackTrace.frames, internal: options?.internal ?? false, reported: false, userData: undefined, stepId: undefined };
+    const apiZone: ApiZone = { title: options?.title, apiName: stackTrace.apiName, frames: stackTrace.frames, internal: false, reported: false, userData: undefined, stepId: undefined };
 
     try {
-      const result = await currentZone().with('apiZone', apiZone).run(async () => await func(apiZone));
-      if (!options?.internal) {
-        logApiCall(logger, `<= ${apiZone.apiName} succeeded`);
-        this._instrumentation.onApiCallEnd(apiZone);
-      }
+      const result = await currentZone().with('apiZone', apiZone).run(() => func(apiZone));
+      logApiCall(logger, `<= ${apiZone.apiName} succeeded`);
+      this._instrumentation.onApiCallEnd(apiZone);
       return result;
     } catch (e) {
       const innerError = ((showInternalStackFrames() || isUnderTest()) && e.stack) ? '\n<inner error>\n' + e.stack : '';
@@ -211,11 +214,9 @@ export abstract class ChannelOwner<T extends channels.Channel = channels.Channel
         e.stack = e.message + stackFrames;
       else
         e.stack = '';
-      if (!options?.internal) {
-        apiZone.error = e;
-        logApiCall(logger, `<= ${apiZone.apiName} failed`);
-        this._instrumentation.onApiCallEnd(apiZone);
-      }
+      apiZone.error = e;
+      logApiCall(logger, `<= ${apiZone.apiName} failed`);
+      this._instrumentation.onApiCallEnd(apiZone);
       throw e;
     }
   }

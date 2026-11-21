@@ -660,13 +660,7 @@ export class InjectedScript {
   }
 
   async checkElementStates(node: Node, states: ElementState[]): Promise<'error:notconnected' | { missingState: ElementState } | undefined> {
-    if (states.includes('stable')) {
-      const stableResult = await this._checkElementIsStable(node);
-      if (stableResult === false)
-        return { missingState: 'stable' };
-      if (stableResult === 'error:notconnected')
-        return 'error:notconnected';
-    }
+    // Check synchronous states first so we don't burn 2 animation frames on hidden/disabled elements.
     for (const state of states) {
       if (state !== 'stable') {
         const result = this.elementState(node, state);
@@ -674,6 +668,23 @@ export class InjectedScript {
           return 'error:notconnected';
         if (!result.matches)
           return { missingState: state };
+      }
+    }
+    if (states.includes('stable')) {
+      const stableResult = await this._checkElementIsStable(node);
+      if (stableResult === false)
+        return { missingState: 'stable' };
+      if (stableResult === 'error:notconnected')
+        return 'error:notconnected';
+      // Re-verify synchronous states after stability rAFs in case element changed while waiting.
+      for (const state of states) {
+        if (state !== 'stable') {
+          const result = this.elementState(node, state);
+          if (result.received === 'error:notconnected')
+            return 'error:notconnected';
+          if (!result.matches)
+            return { missingState: state };
+        }
       }
     }
   }
@@ -1447,10 +1458,120 @@ export class InjectedScript {
   async expect(element: Element, options: FrameExpectParams, elements: Element[]): Promise<{ matches: boolean, received?: ExpectReceived }> {
     const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
     const core = isArray ? this.expectArray(elements, options) : await this.expectSingleElement(element, options);
-    const ariaSnapshot = core.matches !== options.isNot ? undefined : this._ariaSnapshotForExpect(element, options);
+    const ariaSnapshot = (core.matches !== options.isNot || (options as any).skipAriaSnapshot) ? undefined : this._ariaSnapshotForExpect(element, options);
     if (core.received === undefined && ariaSnapshot === undefined)
       return { matches: core.matches };
     return { matches: core.matches, received: { value: core.received, ariaSnapshot } };
+  }
+
+  async waitForExpect(parsed: ParsedSelector, scope: Element | Document | null, options: FrameExpectParams, strict: boolean, maxWaitMs: number): Promise<{ done: boolean, matches: boolean, received?: ExpectReceived, log?: string, missing?: boolean }> {
+    const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
+    const root = scope || this.document;
+    const checkOnce = async (): Promise<{ done: boolean, matches: boolean, received?: ExpectReceived, log?: string, missing?: boolean }> => {
+      const elements = this.querySelectorAll(parsed, root);
+      if (strict && elements.length > 1)
+        throw this.strictModeViolationError(parsed, elements);
+      if (elements.length) {
+        const res = await this.expect(elements[0], options, elements);
+        const done = res.matches !== options.isNot;
+        const log = isArray
+          ? `  locator resolved to ${elements.length} element${elements.length === 1 ? '' : 's'}`
+          : `  locator resolved to ${this.previewNode(elements[0])}`;
+        return { done, matches: res.matches, received: res.received, log };
+      }
+      if (options.expression === 'to.have.count') {
+        const matches = 0 === options.expectedNumber;
+        return { done: matches !== options.isNot, matches, received: { value: 0 }, log: '  locator resolved to 0 elements' };
+      }
+      if (options.expression.endsWith('.array')) {
+        const matches = (options.expectedText?.length ?? 0) === 0;
+        return { done: matches !== options.isNot, matches, received: { value: [] }, log: '  locator resolved to 0 elements' };
+      }
+      if (!options.isNot && options.expression === 'to.be.hidden')
+        return { done: true, matches: true };
+      if (options.isNot && options.expression === 'to.be.visible')
+        return { done: true, matches: false };
+      if (!options.isNot && options.expression === 'to.be.detached')
+        return { done: true, matches: true };
+      if (options.isNot && options.expression === 'to.be.attached')
+        return { done: true, matches: false };
+      if (options.isNot && options.expression === 'to.be.in.viewport')
+        return { done: true, matches: false };
+      return { done: false, matches: options.isNot, missing: true };
+    };
+
+    let last = await checkOnce();
+    if (last.done || maxWaitMs <= 0)
+      return last;
+
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let scheduled = false;
+      let checking = false;
+      let recheck = false;
+
+      const cleanup = () => {
+        observer.disconnect();
+        clearInterval(intervalId);
+        clearTimeout(timeoutId);
+      };
+
+      const finish = (res: typeof last) => {
+        if (settled)
+          return;
+        settled = true;
+        cleanup();
+        resolve(res);
+      };
+
+      const fail = (err: any) => {
+        if (settled)
+          return;
+        settled = true;
+        cleanup();
+        reject(err);
+      };
+
+      const runCheck = async () => {
+        if (settled)
+          return;
+        if (checking) {
+          recheck = true;
+          return;
+        }
+        checking = true;
+        try {
+          do {
+            recheck = false;
+            last = await checkOnce();
+            if (last.done) {
+              finish(last);
+              return;
+            }
+          } while (recheck && !settled);
+        } catch (err) {
+          fail(err);
+        } finally {
+          checking = false;
+        }
+      };
+
+      const trigger = () => {
+        if (settled || scheduled)
+          return;
+        scheduled = true;
+        queueMicrotask(() => {
+          scheduled = false;
+          void runCheck();
+        });
+      };
+
+      const observer = new this.window.MutationObserver(trigger);
+      const targetNode = this.document.documentElement || this.document;
+      observer.observe(targetNode, { subtree: true, childList: true, attributes: true, characterData: true });
+      const intervalId = setInterval(() => void runCheck(), 50);
+      const timeoutId = setTimeout(() => finish(last), maxWaitMs);
+    });
   }
 
   private _ariaSnapshotForExpect(element: Element, options: FrameExpectParams): string | undefined {
@@ -1586,7 +1707,7 @@ export class InjectedScript {
 
     {
       if (expression === 'to.match.aria') {
-        const result = matchesExpectAriaTemplate(element, options.expectedValue);
+        const result = matchesExpectAriaTemplate(element, options.expectedValue, options.isNot);
         return {
           received: result.received,
           matches: !!result.matches.length,

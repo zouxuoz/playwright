@@ -305,21 +305,59 @@ function createExpect(info: ExpectMetaInfo): Expect<{}> {
   return expectFn as Expect<{}>;
 }
 
+function createMatcherProxy(actual: unknown, info: ExpectMetaInfo, promise?: 'resolves' | 'rejects'): any {
+  const cache: Record<string | symbol, any> = Object.create(null);
+  return new Proxy(cache, {
+    get(target, prop) {
+      if (prop in target)
+        return target[prop];
+      if (prop === 'not') {
+        target.not = createMatcherProxy(actual, { ...info, isNot: !info.isNot }, promise);
+        return target.not;
+      }
+      if (!promise && (prop === 'resolves' || prop === 'rejects')) {
+        target[prop] = createMatcherProxy(actual, info, prop);
+        return target[prop];
+      }
+      if (typeof prop === 'string') {
+        const rawMatcher = info.userMatchers[prop] ?? allBuiltinMatchers[prop];
+        if (rawMatcher) {
+          const matcher = promise ? (promiseThrowMatchers[prop] ?? rawMatcher) : rawMatcher;
+          const fn = createMatcher(prop, info, actual, matcher, promise);
+          target[prop] = fn;
+          return fn;
+        }
+      }
+      return undefined;
+    },
+    has(_target, prop) {
+      if (prop === 'not' || (!promise && (prop === 'resolves' || prop === 'rejects')))
+        return true;
+      return typeof prop === 'string' && (prop in info.userMatchers || prop in allBuiltinMatchers);
+    },
+    ownKeys() {
+      const keys = new Set<string>(Object.keys(allBuiltinMatchers));
+      for (const k of Object.keys(info.userMatchers))
+        keys.add(k);
+      keys.add('not');
+      if (!promise) {
+        keys.add('resolves');
+        keys.add('rejects');
+      }
+      return [...keys];
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (prop === 'not' || (!promise && (prop === 'resolves' || prop === 'rejects')) || (typeof prop === 'string' && (prop in info.userMatchers || prop in allBuiltinMatchers)))
+        return { configurable: true, enumerable: true, writable: true };
+      return undefined;
+    },
+  });
+}
+
 function createMatchers(actual: unknown, originalInfo: ExpectMetaInfo, messageOrOptions?: ExpectMessage): any {
   const message = isString(messageOrOptions) ? messageOrOptions : messageOrOptions?.message || originalInfo.message;
   const info = { ...originalInfo, message };
-  const result: any = { not: {}, resolves: { not: {} }, rejects: { not: {} } };
-  const notInfo: ExpectMetaInfo = { ...info, isNot: !info.isNot };
-  for (const [name, matcher] of Object.entries({ ...allBuiltinMatchers, ...info.userMatchers })) {
-    result[name] = createMatcher(name, info, actual, matcher);
-    result.not[name] = createMatcher(name, notInfo, actual, matcher);
-    const promiseMatcher = promiseThrowMatchers[name] ?? matcher;
-    result.resolves[name] = createMatcher(name, info, actual, promiseMatcher, 'resolves');
-    result.resolves.not[name] = createMatcher(name, notInfo, actual, promiseMatcher, 'resolves');
-    result.rejects[name] = createMatcher(name, info, actual, promiseMatcher, 'rejects');
-    result.rejects.not[name] = createMatcher(name, notInfo, actual, promiseMatcher, 'rejects');
-  }
-  return result;
+  return createMatcherProxy(actual, info);
 }
 
 function createMatcher(matcherName: string, info: ExpectMetaInfo, actual: unknown, matcher: RawMatcherFn, promise?: 'resolves' | 'rejects') {

@@ -101,25 +101,28 @@ function _innerAddToCompilationCacheAndSerialize(filename: string, entry: Memory
   };
 }
 
-// Cached code files are prefixed with a `// <sha1>` line so that a partially
-// written cache entry is detected and ignored when reading.
+// Cached code files are written atomically via temp file + rename so readers never
+// observe a partially written file and do not need to re-hash on every read.
 function writeCodeCache(codePath: string, code: string) {
-  fs.writeFileSync(codePath, `// ${calculateSha1(code)}\n${code}`, 'utf8');
+  const tmpPath = `${codePath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmpPath, code, 'utf8');
+  fs.renameSync(tmpPath, codePath);
 }
 
 function readCodeCache(codePath: string): string {
-  const content = fs.readFileSync(codePath, 'utf8');
-  const newLineIndex = content.indexOf('\n');
-  if (newLineIndex === -1)
-    throw new Error(`Cache file is missing the hash header`);
-  const firstLine = content.substring(0, newLineIndex);
-  const sha1Length = 40;
-  if (firstLine.length !== '// '.length + sha1Length || !firstLine.startsWith('// '))
-    throw new Error(`Cache file has a malformed hash header`);
-  const code = content.substring(newLineIndex + 1);
-  if (calculateSha1(code) !== firstLine.substring('// '.length))
-    throw new Error(`Cache file content does not match the hash header`);
-  return code;
+  return fs.readFileSync(codePath, 'utf8');
+}
+
+export function getFromMemoryCompilationCache(filename: string): string | undefined {
+  const cache = memoryCache.get(filename);
+  if (cache?.codePath) {
+    try {
+      return readCodeCache(cache.codePath);
+    } catch {
+      // Not able to read the file - fall through.
+    }
+  }
+  return undefined;
 }
 
 type CompilationCacheLookupResult = {
@@ -173,12 +176,12 @@ export function getFromCompilationCache(filename: string, contentHash: string, m
   };
 }
 
-export function serializeCompilationCache(): SerializedCompilationCache {
+export function serializeCompilationCache(includeFileDependencies = true): SerializedCompilationCache {
   return {
     sourceMaps: [...sourceMaps.entries()],
     memoryCache: [...memoryCache.entries()],
-    fileDependencies: [...fileDependencies.entries()].map(([filename, deps]) => ([filename, [...deps]])),
-    externalDependencies: [...externalDependencies.entries()].map(([filename, deps]) => ([filename, [...deps]])),
+    fileDependencies: includeFileDependencies ? [...fileDependencies.entries()].map(([filename, deps]) => ([filename, [...deps]])) : [],
+    externalDependencies: includeFileDependencies ? [...externalDependencies.entries()].map(([filename, deps]) => ([filename, [...deps]])) : [],
   };
 }
 

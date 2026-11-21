@@ -48,10 +48,10 @@ class Fixture {
     const title = this.registration.customTitle || this.registration.name;
     const location = isUserFixture ? this.registration.location : undefined;
     this._stepInfo = { title: `Fixture ${escapeWithQuotes(title, '"')}`, category: 'fixture', location };
-    if (this.registration.box === 'self')
+    if (this.registration.box === 'self' || (this.registration.box && !isUserFixture))
       this._stepInfo = undefined;
     else if (this.registration.box)
-      this._stepInfo.group = isUserFixture ? 'configuration' : 'internal';
+      this._stepInfo.group = 'configuration';
     this._setupDescription = {
       title,
       phase: 'setup',

@@ -51,24 +51,33 @@ export class PoolBuilder {
     });
   }
 
+  private _suitePools = new Map<TestTypeImpl, Map<Suite, FixturePool>>();
+
   private _buildPoolForTest(test: TestCase, testErrors?: TestError[]): FixturePool {
-    let pool = this._buildTestTypePool(test._testType, testErrors);
-
-    const parents: Suite[] = [];
-    for (let parent: Suite | undefined = test.parent; parent; parent = parent.parent)
-      parents.push(parent);
-    parents.reverse();
-
-    for (const parent of parents) {
-      if (parent._use.length)
-        pool = new FixturePool(parent._use, e => this._handleLoadError(e, testErrors), pool, parent._type === 'describe');
-      for (const hook of parent._hooks)
-        pool.validateFunction(hook.fn, hook.type + ' hook', hook.location);
-      for (const modifier of parent._modifiers)
-        pool.validateFunction(modifier.fn, modifier.type + ' modifier', modifier.location);
-    }
-
+    let pool = this._buildPoolForSuite(test._testType, test.parent, testErrors);
     pool.validateFunction(test.fn, 'Test', test.location);
+    return pool;
+  }
+
+  private _buildPoolForSuite(testType: TestTypeImpl, suite: Suite | undefined, testErrors?: TestError[]): FixturePool {
+    if (!suite)
+      return this._buildTestTypePool(testType, testErrors);
+    let bySuite = this._suitePools.get(testType);
+    if (!bySuite) {
+      bySuite = new Map();
+      this._suitePools.set(testType, bySuite);
+    }
+    let pool = bySuite.get(suite);
+    if (pool)
+      return pool;
+    pool = this._buildPoolForSuite(testType, suite.parent, testErrors);
+    if (suite._use.length)
+      pool = new FixturePool(suite._use, e => this._handleLoadError(e, testErrors), pool, suite._type === 'describe');
+    for (const hook of suite._hooks)
+      pool.validateFunction(hook.fn, hook.type + ' hook', hook.location);
+    for (const modifier of suite._modifiers)
+      pool.validateFunction(modifier.fn, modifier.type + ' modifier', modifier.location);
+    bySuite.set(suite, pool);
     return pool;
   }
 

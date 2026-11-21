@@ -113,18 +113,41 @@ export const tArray = (v: Validator): Validator => {
   return (arg: any, path: string, context: ValidatorContext) => {
     if (!Array.isArray(arg))
       throw new ValidationError(`${path}: expected array, got ${typeof arg}`);
-    return arg.map((x, index) => v(x, path + '[' + index + ']', context));
+    const len = arg.length;
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+      try {
+        result[i] = v(arg[i], '', context);
+      } catch (e) {
+        if (e instanceof ValidationError)
+          throw new ValidationError(`${path}[${i}]${e.message.startsWith(':') ? e.message : '.' + e.message}`);
+        throw e;
+      }
+    }
+    return result;
   };
 };
 export const tObject = (s: { [key: string]: Validator }): Validator => {
+  const entries = Object.entries(s);
+  const len = entries.length;
   return (arg: any, path: string, context: ValidatorContext) => {
     if (Object.is(arg, null))
       throw new ValidationError(`${path}: expected object, got null`);
     if (typeof arg !== 'object')
       throw new ValidationError(`${path}: expected object, got ${typeof arg}`);
     const result: any = {};
-    for (const [key, v] of Object.entries(s)) {
-      const value = v(arg[key], path ? path + '.' + key : key, context);
+    for (let i = 0; i < len; i++) {
+      const [key, v] = entries[i];
+      let value: any;
+      try {
+        value = v(arg[key], '', context);
+      } catch (e) {
+        if (e instanceof ValidationError) {
+          const fullKey = path ? path + '.' + key : key;
+          throw new ValidationError(`${fullKey}${e.message.startsWith(':') ? e.message : '.' + e.message}`);
+        }
+        throw e;
+      }
       if (!Object.is(value, undefined))
         result[key] = value;
     }

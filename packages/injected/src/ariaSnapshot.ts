@@ -35,6 +35,15 @@ type AriaRef = {
   ref: string;
 };
 
+const kDefaultVisibleBox = { visible: true, inline: false };
+const kAriaCheckedRolesSet = new Set<string>(roleUtils.kAriaCheckedRoles);
+const kAriaDisabledRolesSet = new Set<string>(roleUtils.kAriaDisabledRoles);
+const kAriaExpandedRolesSet = new Set<string>(roleUtils.kAriaExpandedRoles);
+const kAriaInvalidRolesSet = new Set<string>(roleUtils.kAriaInvalidRoles);
+const kAriaLevelRolesSet = new Set<string>(roleUtils.kAriaLevelRoles);
+const kAriaPressedRolesSet = new Set<string>(roleUtils.kAriaPressedRoles);
+const kAriaSelectedRolesSet = new Set<string>(roleUtils.kAriaSelectedRoles);
+
 let lastRef = 0;
 
 export type AriaTreeOptions = {
@@ -256,16 +265,18 @@ function toAriaNode(element: Element, options: InternalOptions, nameSourceElemen
   if (!role || role === 'presentation' || role === 'none')
     return null;
 
-  const name = roleUtils.getElementAccessibleName(element, false);
-  const receivesPointerEvents = roleUtils.receivesPointerEvents(element);
+  const needRefs = options.refs !== 'none';
+  const nameText = needRefs ? undefined : roleUtils.getElementAccessibleNameText(element, false);
+  const nameObj = needRefs ? roleUtils.getElementAccessibleName(element, false) : undefined;
+  const receivesPointerEvents = needRefs ? roleUtils.receivesPointerEvents(element) : true;
 
-  const box = computeBox(element);
+  const box = (needRefs || role === 'generic' || options.renderBoxes) ? computeBox(element) : kDefaultVisibleBox;
   if (role === 'generic' && box.inline && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE)
     return null;
 
   const result: aria.AriaNode = {
     role,
-    name: normalizeWhiteSpace(name.text),
+    name: normalizeWhiteSpace(needRefs ? nameObj!.text : nameText!),
     children: [],
     props: {},
     box,
@@ -273,30 +284,32 @@ function toAriaNode(element: Element, options: InternalOptions, nameSourceElemen
     active
   };
   setAriaNodeElement(result, element);
-  nameSourceElements.set(result, name.elements);
-  computeAriaRef(result, options);
+  if (needRefs) {
+    nameSourceElements.set(result, nameObj!.elements);
+    computeAriaRef(result, options);
+  }
 
-  if (roleUtils.kAriaCheckedRoles.includes(role))
+  if (kAriaCheckedRolesSet.has(role))
     result.checked = roleUtils.getAriaChecked(element);
 
-  if (roleUtils.kAriaDisabledRoles.includes(role))
+  if (kAriaDisabledRolesSet.has(role))
     result.disabled = roleUtils.getAriaDisabled(element);
 
-  if (roleUtils.kAriaExpandedRoles.includes(role))
+  if (kAriaExpandedRolesSet.has(role))
     result.expanded = roleUtils.getAriaExpanded(element);
 
-  if (roleUtils.kAriaInvalidRoles.includes(role)) {
+  if (kAriaInvalidRolesSet.has(role)) {
     const invalid = roleUtils.getAriaInvalid(element);
     result.invalid = invalid === 'false' ? false : invalid === 'true' ? true : invalid;
   }
 
-  if (roleUtils.kAriaLevelRoles.includes(role))
+  if (kAriaLevelRolesSet.has(role))
     result.level = roleUtils.getAriaLevel(element);
 
-  if (roleUtils.kAriaPressedRoles.includes(role))
+  if (kAriaPressedRolesSet.has(role))
     result.pressed = roleUtils.getAriaPressed(element);
 
-  if (roleUtils.kAriaSelectedRoles.includes(role))
+  if (kAriaSelectedRolesSet.has(role))
     result.selected = roleUtils.getAriaSelected(element);
 
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
@@ -357,9 +370,15 @@ export type MatcherReceived = {
   regex: string;
 };
 
-export function matchesExpectAriaTemplate(rootElement: Element, template: aria.AriaTemplateNode): { matches: aria.AriaNode[], received: MatcherReceived } {
+export function matchesExpectAriaTemplate(rootElement: Element, template: aria.AriaTemplateNode, isNot?: boolean): { matches: aria.AriaNode[], received: MatcherReceived } {
   const snapshot = generateAriaTree(rootElement, { mode: 'default' });
   const matches = matchesNodeDeep(snapshot.root, template, false, false);
+  if (isNot !== undefined && (!!matches.length !== isNot)) {
+    return {
+      matches,
+      received: { raw: '', regex: '' }
+    };
+  }
   return {
     matches,
     received: {

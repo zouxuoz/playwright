@@ -94,6 +94,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: 
     private _observer: MutationObserver;
     private _observedDocument: Document | undefined;
     private _targetGeneration = 0;
+    private _scrolledElements = new WeakSet<Element>();
 
     constructor() {
       const invalidateCSSGroupingRule = (rule: CSSGroupingRule) => {
@@ -158,6 +159,15 @@ export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: 
       (document as any).addEventListener('__playwright_reset_targets__', () => {
         ++this._targetGeneration;
       });
+      document.addEventListener('scroll', (event: Event) => {
+        const target = event.target;
+        if (target === document) {
+          if (document.scrollingElement)
+            this._scrolledElements.add(document.scrollingElement);
+        } else if (target && (target as Node).nodeType === Node.ELEMENT_NODE) {
+          this._scrolledElements.add(target as Element);
+        }
+      }, { capture: true, passive: true });
     }
 
     private _interceptNativeMethod(obj: any, method: string, cb: (thisObj: any, result: any) => void) {
@@ -505,15 +515,17 @@ export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: 
             expectValue(value);
             attrs[kDialogOpenAttribute] = value;
           }
-          if (element.scrollTop) {
-            expectValue(kScrollTopAttribute);
-            expectValue(element.scrollTop);
-            attrs[kScrollTopAttribute] = '' + element.scrollTop;
-          }
-          if (element.scrollLeft) {
-            expectValue(kScrollLeftAttribute);
-            expectValue(element.scrollLeft);
-            attrs[kScrollLeftAttribute] = '' + element.scrollLeft;
+          if (this._scrolledElements.has(element)) {
+            if (element.scrollTop) {
+              expectValue(kScrollTopAttribute);
+              expectValue(element.scrollTop);
+              attrs[kScrollTopAttribute] = '' + element.scrollTop;
+            }
+            if (element.scrollLeft) {
+              expectValue(kScrollLeftAttribute);
+              expectValue(element.scrollLeft);
+              attrs[kScrollLeftAttribute] = '' + element.scrollLeft;
+            }
           }
           if (element.shadowRoot) {
             ++shadowDomNesting;

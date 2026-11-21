@@ -132,12 +132,12 @@ export class ProgressController {
     };
 
     if (deadline) {
-      const timeoutError = new TimeoutError(`Timeout ${timeout}ms exceeded.`);
       timer = setTimeout(() => {
         // TODO: migrate this to "progress.disableTimeout()".
         if (this.metadata.pauseStartTime && !this.metadata.pauseEndTime)
           return;
         if (this._state === 'running') {
+          const timeoutError = new TimeoutError(`Timeout ${timeout}ms exceeded.`);
           this._state = { error: timeoutError };
           this._forceAbortPromise.reject(timeoutError);
           this._controller.abort(timeoutError);

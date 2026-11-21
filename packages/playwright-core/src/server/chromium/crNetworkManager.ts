@@ -147,14 +147,19 @@ export class CRNetworkManager {
     });
   }
 
-  async setRequestInterception(value: boolean) {
+  private _scopedInterceptionGlobs: string[] | undefined;
+
+  async setRequestInterception(value: boolean, scopedGlobs?: string[]) {
+    const globsKey = scopedGlobs ? scopedGlobs.join('\0') : '';
+    const prevKey = this._scopedInterceptionGlobs ? this._scopedInterceptionGlobs.join('\0') : '';
     this._userRequestInterceptionEnabled = value;
-    await this._updateProtocolRequestInterception();
+    this._scopedInterceptionGlobs = scopedGlobs;
+    await this._updateProtocolRequestInterception(globsKey !== prevKey);
   }
 
-  async _updateProtocolRequestInterception() {
+  async _updateProtocolRequestInterception(patternsChanged = false) {
     const enabled = this._userRequestInterceptionEnabled || !!this._credentials;
-    if (enabled === this._protocolRequestInterceptionEnabled)
+    if (enabled === this._protocolRequestInterceptionEnabled && !patternsChanged)
       return;
     this._protocolRequestInterceptionEnabled = enabled;
     await this._forEachSession(info => this._updateProtocolRequestInterceptionForSession(info));
@@ -164,13 +169,22 @@ export class CRNetworkManager {
     const enabled = this._protocolRequestInterceptionEnabled;
     if (initial && !enabled)
       return;
-    const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: enabled });
+    const isWildcardRoute = this._userRequestInterceptionEnabled && !this._scopedInterceptionGlobs;
+    const cachePromise = info.session.send('Network.setCacheDisabled', { cacheDisabled: isWildcardRoute });
     let fetchPromise = Promise.resolve<any>(undefined);
     if (!info.workerFrame) {
-      if (enabled)
-        fetchPromise = info.session.send('Fetch.enable', { handleAuthRequests: true, patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
-      else
+      if (enabled) {
+        let patterns: Protocol.Fetch.RequestPattern[];
+        if (this._userRequestInterceptionEnabled && this._scopedInterceptionGlobs) {
+          patterns = this._scopedInterceptionGlobs.map(urlPattern => ({ urlPattern, requestStage: 'Request' }));
+        } else {
+          // Wildcard route or auth-only (Chromium requires non-empty patterns when handleAuthRequests is true).
+          patterns = [{ urlPattern: '*', requestStage: 'Request' }];
+        }
+        fetchPromise = info.session.send('Fetch.enable', { handleAuthRequests: true, patterns });
+      } else {
         fetchPromise = info.session.send('Fetch.disable');
+      }
     }
     await Promise.all([cachePromise, fetchPromise]);
   }

@@ -108,6 +108,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
       includeTraceInfo: true,
       recordRequestOverrides: false,
       waitForContentOnStop: false,
+      omitPages: true,
     });
     const testIdAttributeName = ('selectors' in context) ? context.selectors().testIdAttributeName() : undefined;
     this._contextCreatedEvent = {
@@ -689,10 +690,18 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
   }
 
   private _appendTraceEvent(event: trace.TraceEvent) {
-    const visited = visitTraceEvent(event, this._state!.traceSha1s);
-    // Do not flush (console) events, they are too noisy, unless we are in ui mode (live).
-    const flush = this._state!.options.live || (event.type !== 'event' && event.type !== 'console' && event.type !== 'log');
-    this._fs.appendFile(this._state!.traceFile, JSON.stringify(visited) + '\n', flush);
+    const type = event.type;
+    let serialized: string;
+    if (type === 'frame-snapshot' || type === 'resource-snapshot' || type === 'screencast-frame' || type === 'screenshot' || type === 'log' || type === 'input' || type === 'context-options') {
+      collectTraceSha1s(event, this._state!.traceSha1s);
+      serialized = JSON.stringify(event);
+    } else {
+      const visited = visitTraceEvent(event, this._state!.traceSha1s);
+      serialized = JSON.stringify(visited);
+    }
+    // Only force flush in live (UI) mode; otherwise let SerializedFS batch writes in 64KB chunks.
+    const flush = !!this._state!.options.live;
+    this._fs.appendFile(this._state!.traceFile, serialized + '\n', flush);
   }
 
   private _appendResource(sha1: string, buffer: Buffer) {
@@ -701,6 +710,23 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._allResources.add(sha1);
     const resourcePath = path.join(this._state!.resourcesDir, sha1);
     this._fs.writeFile(resourcePath, buffer, true /* skipIfExists */);
+  }
+}
+
+function collectTraceSha1s(object: any, sha1s: Set<string>) {
+  if (!object || typeof object !== 'object')
+    return;
+  if (Array.isArray(object)) {
+    for (let i = 0; i < object.length; i++)
+      collectTraceSha1s(object[i], sha1s);
+    return;
+  }
+  for (const key in object) {
+    const val = object[key];
+    if (val && (key === 'sha1' || key === '_sha1' || key.endsWith('Sha1')))
+      sha1s.add(val);
+    else if (val && typeof val === 'object')
+      collectTraceSha1s(val, sha1s);
   }
 }
 

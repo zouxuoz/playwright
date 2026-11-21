@@ -1140,19 +1140,19 @@ export class Frame extends SdkObject<FrameEventMap> {
     return result!;
   }
 
-  async retryWithProgressAndBackoff<R>(progress: Progress, action: (progress: Progress, continuePolling: symbol) => Promise<R | symbol>): Promise<R> {
+  async retryWithProgressAndBackoff<R>(progress: Progress, action: (progress: Progress, continuePolling: symbol) => Promise<R | symbol>, skipInitialZero = false): Promise<R> {
     const backoffScale = [20, 50, 100, 100, 500];
     if (progress.timeout) {
       // For small timeouts, cap the large backoff values to produce meaningul retries.
       while (backoffScale.length && backoffScale[backoffScale.length - 1] > progress.timeout / 5)
         backoffScale.pop();
     }
-    return await this.retryWithProgressAndTimeouts<R>(progress, backoffScale, action);
+    return await this.retryWithProgressAndTimeouts<R>(progress, backoffScale, action, skipInitialZero);
   }
 
-  async retryWithProgressAndTimeouts<R>(progress: Progress, timeouts: number[], action: (progress: Progress, continuePolling: symbol) => Promise<R | symbol>): Promise<R> {
+  async retryWithProgressAndTimeouts<R>(progress: Progress, timeouts: number[], action: (progress: Progress, continuePolling: symbol) => Promise<R | symbol>, skipInitialZero = false): Promise<R> {
     const continuePolling = Symbol('continuePolling');
-    timeouts = [0, ...timeouts];
+    timeouts = skipInitialZero ? [...timeouts] : [0, ...timeouts];
     let timeoutIndex = 0;
     while (true) {
       const timeout = timeouts[Math.min(timeoutIndex++, timeouts.length - 1)];
@@ -1519,18 +1519,52 @@ export class Frame extends SdkObject<FrameEventMap> {
         // Ignore any other errors from one-shot, we'll handle them during retries.
       }
 
-      // Step 3: auto-retry expect with increasing timeouts. Bounded by the total remaining time.
-      await this.retryWithProgressAndBackoff(progress, async (progress, continuePolling) => {
-        await this._page.performActionPreChecks(progress);
-        const { matches, received } = await this._expectInternal(progress, selector, options, lastIntermediateResult, false);
-        if (matches === options.isNot) {
-          // Keep waiting in these cases:
-          // expect(locator).conditionThatDoesNotMatch
-          // expect(locator).not.conditionThatDoesMatch
-          return continuePolling;
-        }
-        return { matches, received };
-      });
+      // Step 3: auto-retry expect with in-page MutationObserver push wait when possible,
+      // falling back to backoff polling for multi-frame / locator-handler / page-level checks.
+      const canUseObserver = !!selector && !this._page._locatorHandlers.length && options.expression !== 'to.have.title' && options.expression !== 'to.have.url' && options.expression !== 'to.have.property';
+      if (canUseObserver) {
+        const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
+        const pollOptions = { ...options, skipAriaSnapshot: true } as FrameExpectParams;
+        await this.retryWithProgressAndBackoff(progress, async (progress, continuePolling) => {
+          const resolved = await progress.race(this.selectors.resolveFrameForSelector(selector, { strict: !isArray }));
+          if (!resolved) {
+            const { matches, received } = await this._expectInternal(progress, selector, options, lastIntermediateResult, false);
+            if (matches === options.isNot)
+              return continuePolling;
+            return { matches, received };
+          }
+          const { frame, info, scope } = resolved;
+          const context = await progress.race(frame.context(info.world));
+          const injected = await progress.race(context.injectedScript());
+          const maxWaitMs = progress.timeout ? Math.min(1000, Math.max(50, progress.timeout)) : 1000;
+          const res = await progress.race(injected.evaluate((injected, params) => {
+            return injected.waitForExpect(params.parsed, params.scope || null, params.options, params.strict, params.maxWaitMs);
+          }, { parsed: info.parsed, scope, options: pollOptions, strict: !isArray, maxWaitMs }));
+          if (res.log)
+            progress.log(res.log);
+          if (!res.done) {
+            lastIntermediateResult.errorMessage = res.missing ? 'element(s) not found' : undefined;
+            lastIntermediateResult.received = res.received;
+            lastIntermediateResult.isSet = true;
+            if (!res.missing && !Array.isArray(res.received?.value))
+              progress.log(`  unexpected value "${renderUnexpectedValue(options.expression, res.received?.value)}"`);
+            return continuePolling;
+          }
+          return { matches: res.matches, received: res.received };
+        }, false);
+      } else {
+        await this.retryWithProgressAndBackoff(progress, async (progress, continuePolling) => {
+          await this._page.performActionPreChecks(progress);
+          const { matches, received } = await this._expectInternal(progress, selector, options, lastIntermediateResult, false);
+          if (matches === options.isNot) {
+            // Keep waiting in these cases:
+            // expect(locator).conditionThatDoesNotMatch
+            // expect(locator).not.conditionThatDoesMatch
+            return continuePolling;
+          }
+          return { matches, received };
+        }, true /* skipInitialZero */);
+      }
     } catch (e) {
       const details: ExpectErrorDetails = {};
       if (isInvalidSelectorError(e)) {
@@ -1538,6 +1572,20 @@ export class Frame extends SdkObject<FrameEventMap> {
       } else if (js.isJavaScriptErrorInEvaluate(e)) {
         details.customErrorMessage = e.message.startsWith('Error: ') ? e.message.substring('Error: '.length) : e.message;
       } else if (lastIntermediateResult.isSet) {
+        const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
+        if (!isTargetClosedError(e) && !isSessionClosedError(e) && !isArray && options.expression !== 'to.match.aria' && !lastIntermediateResult.received?.ariaSnapshot) {
+          try {
+            const context = await this.context(options.expression === 'to.have.property' ? 'main' : 'utility');
+            const injected = await context.injectedScript();
+            const ariaSnapshot = await injected.evaluate(injected => {
+              if (injected.document.body)
+                return injected.ariaSnapshotForExpectFailure(injected.document.body, { mode: 'default' });
+            });
+            if (ariaSnapshot)
+              lastIntermediateResult.received = { ...lastIntermediateResult.received, ariaSnapshot };
+          } catch {
+          }
+        }
         details.received = lastIntermediateResult.received;
         details.customErrorMessage = lastIntermediateResult.errorMessage;
       }
@@ -1562,6 +1610,7 @@ export class Frame extends SdkObject<FrameEventMap> {
     let matches = options.isNot;
     let missingReceived = false;
 
+    const pollOptions = { ...options, skipAriaSnapshot: true } as FrameExpectParams;
     // Non-array expectations are strict (callOnSelector throws on multiple); array ones are not.
     const resolved = await progress.race(this.selectors.callOnSelector(effectiveSelector, { strict: !isArray, mainWorld, markTargets: 'all' }, async ({ injected, elements }, options) => {
       const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
@@ -1569,7 +1618,7 @@ export class Frame extends SdkObject<FrameEventMap> {
         ? `  locator resolved to ${elements.length} element${elements.length === 1 ? '' : 's'}`
         : `  locator resolved to ${injected.previewNode(elements[0])}`;
       return { log, ...await injected.expect(elements[0], options, elements) };
-    }, options));
+    }, pollOptions));
 
     if (resolved) {
       received = resolved.result.received;
@@ -1599,16 +1648,6 @@ export class Frame extends SdkObject<FrameEventMap> {
       } else {
         matches = options.isNot;
         missingReceived = true;
-      }
-      if (matches === options.isNot && !isArray) {
-        const context = await progress.race(this.context(mainWorld ? 'main' : 'utility'));
-        const injected = await progress.race(context.injectedScript());
-        const ariaSnapshot = await progress.race(injected.evaluate(injected => {
-          if (injected.document.body)
-            return injected.ariaSnapshotForExpectFailure(injected.document.body, { mode: 'default' });
-        }));
-        if (ariaSnapshot)
-          received = { ...received, ariaSnapshot };
       }
     }
 

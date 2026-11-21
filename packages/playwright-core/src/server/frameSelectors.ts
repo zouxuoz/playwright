@@ -117,6 +117,10 @@ export class FrameSelectors {
     return jumptToFrame;
   }
 
+  async resolveFrameForSelector(selector: string, options: types.StrictOptions = {}, scope?: ElementHandle): Promise<SelectorInFrame | null> {
+    return this._resolveFrameForSelector(selector, options, scope);
+  }
+
   private async _resolveFrameForSelector(selector: string, options: types.StrictOptions = {}, scope?: ElementHandle): Promise<SelectorInFrame | null> {
     let frame: Frame = this.frame;
     const frameChunks = splitSelectorByFrame(selector);

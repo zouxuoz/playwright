@@ -46,10 +46,13 @@ export async function zip(progress: Progress, stackSessions: Map<string, StackSe
   const zipFile = new yazl.ZipFile();
   (zipFile as any as EventEmitter).on('error', error => promise.reject(error));
 
+  const kUncompressibleExts = new Set(['.jpeg', '.jpg', '.png', '.webp', '.gif', '.woff2', '.webm', '.mp4', '.gz', '.br', '.zip']);
   const addFile = (file: string, name: string) => {
     try {
-      if (fs.statSync(file).isFile())
-        zipFile.addFile(file, name);
+      if (fs.statSync(file).isFile()) {
+        const ext = path.extname(name).toLowerCase();
+        zipFile.addFile(file, name, { compress: !kUncompressibleExts.has(ext) });
+      }
     } catch (e) {
     }
   };

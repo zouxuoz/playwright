@@ -543,11 +543,21 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
 
 }
 
+const storageStateCache = new Map<string, { mtimeMs: number, data: NonNullable<channels.BrowserNewContextParams['storageState']> }>();
+
 async function prepareStorageState(storageState: string | SetStorageState): Promise<NonNullable<channels.BrowserNewContextParams['storageState']>> {
   if (typeof storageState !== 'string')
     return storageState as any;
   try {
-    return JSON.parse(await fs.promises.readFile(storageState, 'utf8'));
+    const stat = await fs.promises.stat(storageState);
+    const cached = storageStateCache.get(storageState);
+    if (cached && cached.mtimeMs === stat.mtimeMs)
+      return cached.data;
+    const data = JSON.parse(await fs.promises.readFile(storageState, 'utf8'));
+    if (storageStateCache.size > 64)
+      storageStateCache.clear();
+    storageStateCache.set(storageState, { mtimeMs: stat.mtimeMs, data });
+    return data;
   } catch (e) {
     rewriteErrorMessage(e, `Error reading storage state from ${storageState}:\n` + e.message);
     throw e;

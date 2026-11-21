@@ -108,6 +108,8 @@ export class FrameExecutionContext extends js.ExecutionContext {
         return new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(options)});
         })();
       `;
+      // Pipeline UtilityScript creation with InjectedScript to save 1 sequential CDP RTT on first frame query.
+      void this._utilityScript().catch(() => {});
       this._injectedScriptPromise = this.rawEvaluateHandle(source)
           .then(handle => {
             handle._setPreview('InjectedScript');
@@ -129,7 +131,6 @@ export class ElementHandle<T extends Node = Node> extends js.JSHandle<T> {
     super(context, 'node', undefined, objectId);
     this._page = context.frame._page;
     this._frame = context.frame;
-    this._initializePreview().catch(e => {});
   }
 
   async _initializePreview() {
@@ -491,10 +492,12 @@ export class ElementHandle<T extends Node = Node> extends js.JSHandle<T> {
       if (restoreModifiers)
         await this._page.keyboard.ensureModifiers(progress, restoreModifiers);
       if (hitTargetInterceptionHandle) {
+        const handleToStop = hitTargetInterceptionHandle;
+        hitTargetInterceptionHandle = undefined;
         const stopHitTargetInterception = this._frame.raceAgainstEvaluationStallingEvents(() => {
-          return hitTargetInterceptionHandle.evaluate(h => h.stop());
+          return handleToStop.evaluate(h => h.stop());
         }).catch(e => 'done' as const).finally(() => {
-          hitTargetInterceptionHandle?.dispose();
+          handleToStop.dispose();
         });
         if (options.waitAfter !== false) {
           // When noWaitAfter is passed, we do not want to accidentally stall on

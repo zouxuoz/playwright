@@ -172,7 +172,7 @@ export function serializeConfig(config: FullConfigInternal, passCompilationCache
   const result: SerializedConfig = {
     location: { configDir: config.configDir, resolvedConfigFile: config.config.configFile },
     configCLIOverrides: config.configCLIOverrides,
-    compilationCache: passCompilationCache ? serializeCompilationCache() : undefined,
+    compilationCache: passCompilationCache ? serializeCompilationCache(false) : undefined,
   };
 
   try {

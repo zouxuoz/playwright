@@ -59,6 +59,8 @@ function compareImages(mimeType: string, actualBuffer: Buffer | string, expected
   if (!actualBuffer || !(actualBuffer instanceof Buffer))
     return { errorMessage: 'Actual result should be a Buffer.' };
   validateBuffer(expectedBuffer, mimeType);
+  if (actualBuffer.equals(expectedBuffer))
+    return null;
 
   const decode = (buffer: Buffer): ImageData => {
     if (mimeType === 'image/png')

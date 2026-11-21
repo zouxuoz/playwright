@@ -109,7 +109,7 @@ type SessionEventListener = (method: string, params?: Object) => void;
 export class CRSession extends SdkObject<Protocol.EventMap & ConnectionEventMap> {
   private readonly _connection: CRConnection;
   private _eventListener?: SessionEventListener;
-  private readonly _callbacks = new Map<number, { resolve: (o: any) => void, reject: (e: ProtocolError) => void, error: ProtocolError }>();
+  private readonly _callbacks = new Map<number, { resolve: (o: any) => void, reject: (e: ProtocolError) => void, method: string }>();
   private readonly _sessionId: string;
   private readonly _parentSession: CRSession | null;
   private _crashed: boolean = false;
@@ -143,7 +143,7 @@ export class CRSession extends SdkObject<Protocol.EventMap & ConnectionEventMap>
       throw new ProtocolError(this._crashed ? 'crashed' : 'closed', undefined, this._connection._browserDisconnectedLogs);
     const id = this._connection._rawSend(this._sessionId, method, params);
     return new Promise((resolve, reject) => {
-      this._callbacks.set(id, { resolve, reject, error: new ProtocolError('error', method) });
+      this._callbacks.set(id, { resolve, reject, method });
     });
   }
 
@@ -156,8 +156,9 @@ export class CRSession extends SdkObject<Protocol.EventMap & ConnectionEventMap>
       const callback = this._callbacks.get(object.id)!;
       this._callbacks.delete(object.id);
       if (object.error) {
-        callback.error.setMessage(object.error.message);
-        callback.reject(callback.error);
+        const error = new ProtocolError('error', callback.method);
+        error.setMessage(object.error.message);
+        callback.reject(error);
       } else {
         callback.resolve(object.result);
       }
@@ -193,10 +194,9 @@ export class CRSession extends SdkObject<Protocol.EventMap & ConnectionEventMap>
 
   private _rejectPendingCallbacks(message: string) {
     for (const callback of this._callbacks.values()) {
-      callback.error.setMessage(message);
-      callback.error.type = this._crashed ? 'crashed' : 'closed';
-      callback.error.logs = this._connection._browserDisconnectedLogs;
-      callback.reject(callback.error);
+      const error = new ProtocolError(this._crashed ? 'crashed' : 'closed', callback.method, this._connection._browserDisconnectedLogs);
+      error.setMessage(message);
+      callback.reject(error);
     }
     this._callbacks.clear();
   }

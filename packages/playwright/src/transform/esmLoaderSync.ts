@@ -17,9 +17,15 @@
 import fs from 'fs';
 import url from 'url';
 
-import { currentFileDepsCollector } from './compilationCache';
+import { currentFileDepsCollector, getFromMemoryCompilationCache } from './compilationCache';
 import { resolveHook, shouldTransform, transformHook } from './transform';
 import { fileIsModule } from '../util';
+
+function hasImportCondition(conditions?: string[] | Set<string>): boolean {
+  if (!conditions)
+    return false;
+  return Array.isArray(conditions) ? conditions.includes('import') : conditions.has('import');
+}
 
 export function resolve(specifier: string, context: { parentURL?: string, conditions?: string[] | Set<string> }, nextResolve: Function) {
   if (context.parentURL && context.parentURL.startsWith('file://')) {
@@ -32,7 +38,7 @@ export function resolve(specifier: string, context: { parentURL?: string, condit
       // - the ESM resolver wants a file:// URL and, on Windows, mistakes an absolute path's
       //   drive letter for a URL scheme ("Received protocol 'c:'").
       // The `import` condition is present only for ESM resolution, so use it to pick the form.
-      specifier = new Set(context.conditions).has('import') ? url.pathToFileURL(resolved).toString() : resolved;
+      specifier = hasImportCondition(context.conditions) ? url.pathToFileURL(resolved).toString() : resolved;
     }
   }
   const result = nextResolve(specifier, context);
@@ -73,8 +79,17 @@ export function load(moduleUrl: string, context: { format?: string, conditions?:
 
   // A file reached via `require` is loaded as CommonJS. Files reached via `import` keep real ESM semantics.
   // This is a "bundler" behavior, where we go against Node.js semantics, to support extension-less esm imports, path mapping, etc.
-  const isRequire = !new Set(context.conditions).has('import');
+  const isRequire = !hasImportCondition(context.conditions);
   const format = isRequire ? 'commonjs' : (kSupportedFormats.get(context.format) || (fileIsModule(filename) ? 'module' : 'commonjs'));
+
+  const memCached = getFromMemoryCompilationCache(filename);
+  if (memCached !== undefined) {
+    return {
+      format,
+      source: memCached,
+      shortCircuit: true,
+    };
+  }
 
   const code = fs.readFileSync(filename, 'utf-8');
   // Pass `moduleUrl` only for ESM. For CommonJS we omit it so that babel

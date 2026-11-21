@@ -450,6 +450,7 @@ export class WorkerMain extends ProcessRunner {
         firstAfterHooksError = firstAfterHooksError ?? error;
       }
 
+      testInfo._didFinishTestFunctionAndAfterEachHooks = true;
       testInfo._tracing.didFinishTestFunctionAndAfterEachHooks();
 
       try {

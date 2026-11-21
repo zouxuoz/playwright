@@ -688,8 +688,36 @@ export class Page extends SdkObject<PageEventMap> {
     await this.delegate.removeInitScripts([initScript]);
   }
 
+  _dispatcherInterceptionPatterns: any[] | undefined;
+
+  _setDispatcherInterceptionPatterns(patterns: any[]) {
+    this._dispatcherInterceptionPatterns = patterns.length ? patterns : undefined;
+  }
+
   needsRequestInterception(): boolean {
     return this.requestInterceptors.length > 0 || this.browserContext.requestInterceptors.length > 0;
+  }
+
+  scopedRequestInterceptionGlobs(): string[] | undefined {
+    // Only scope CDP Fetch patterns when interception comes solely from PageDispatcher globs
+    // (no context-level interceptors, HAR routes, or non-dispatcher interceptors).
+    if (this.browserContext.requestInterceptors.length > 0 || this.requestInterceptors.length !== 1)
+      return undefined;
+    const patterns = this._dispatcherInterceptionPatterns;
+    if (!patterns || !patterns.length)
+      return undefined;
+    const globs: string[] = [];
+    for (const p of patterns) {
+      if (typeof p !== 'string')
+        return undefined;
+      if (p === '*' || p === '**' || p === '**/*' || /[{}\[\]\\]/.test(p))
+        return undefined;
+      const cdpPattern = p.replace(/\*\*/g, '*');
+      if (cdpPattern === '*')
+        return undefined;
+      globs.push(cdpPattern);
+    }
+    return globs;
   }
 
   async addRequestInterceptor(progress: Progress, handler: network.RouteHandler, prepend?: 'prepend'): Promise<void> {

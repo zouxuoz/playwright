@@ -175,11 +175,23 @@ export function urlMatchesEqual(match1: URLMatch, match2: URLMatch) {
   return match1 === match2;
 }
 
+const kGlobRegexCache = new Map<string, RegExp>();
+const kGlobRegexCacheLimit = 1024;
+
 export function urlMatches(baseURL: string | undefined, urlString: string, match: URLMatch | undefined, webSocketUrl?: boolean): boolean {
   if (match === undefined || match === '')
     return true;
-  if (isString(match))
-    match = new RegExp(resolveGlobToRegexPattern(baseURL, match, webSocketUrl));
+  if (isString(match)) {
+    const cacheKey = `${webSocketUrl ? '1' : '0'}\0${baseURL || ''}\0${match}`;
+    let regex = kGlobRegexCache.get(cacheKey);
+    if (!regex) {
+      regex = new RegExp(resolveGlobToRegexPattern(baseURL, match, webSocketUrl));
+      if (kGlobRegexCache.size >= kGlobRegexCacheLimit)
+        kGlobRegexCache.clear();
+      kGlobRegexCache.set(cacheKey, regex);
+    }
+    match = regex;
+  }
   if (isRegExp(match)) {
     match.lastIndex = 0;
     return match.test(urlString);

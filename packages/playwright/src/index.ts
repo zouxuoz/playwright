@@ -665,6 +665,8 @@ class SnapshotRecorder {
   }
 
   async captureTemporary(context: BrowserContextImpl) {
+    if (this.testInfo._didFinishTestFunctionAndAfterEachHooks && !this.shouldCaptureUponFinish())
+      return;
     if (this._mode === 'on' || this._mode === 'only-on-failure' || (this._mode === 'on-first-failure' && this.testInfo.retry === 0))
       await Promise.all(context.pages().map(page => this._snapshotPage(page, true)));
   }

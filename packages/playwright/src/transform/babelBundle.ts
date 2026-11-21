@@ -62,16 +62,11 @@ function babelTransformOptions(isTypeScript: boolean, isModule: boolean, plugins
         [require('@babel/plugin-proposal-decorators'), { version: '2023-05' }],
         [require('@babel/plugin-transform-class-properties')],
         [require('@babel/plugin-transform-class-static-block')],
-        [require('@babel/plugin-transform-numeric-separator')],
-        [require('@babel/plugin-transform-logical-assignment-operators')],
-        [require('@babel/plugin-transform-nullish-coalescing-operator')],
-        [require('@babel/plugin-transform-optional-chaining')],
         [require('@babel/plugin-transform-private-methods')],
         [require('@babel/plugin-syntax-json-strings')],
         [require('@babel/plugin-syntax-optional-catch-binding')],
         [require('@babel/plugin-syntax-async-generators')],
         [require('@babel/plugin-syntax-object-rest-spread')],
-        [require('@babel/plugin-transform-export-namespace-from')],
         [
           // From https://github.com/G-Rath/babel-plugin-replace-ts-export-assignment/blob/8dfdca32c8aa428574b0cae341444fc5822f2dc6/src/index.ts
           (
@@ -136,7 +131,7 @@ function babelTransformOptions(isTypeScript: boolean, isModule: boolean, plugins
       ...pluginsEpilogue.map(([name, options]) => [require(name), options]),
     ],
     compact: false,
-    sourceMaps: 'both',
+    sourceMaps: true,
   };
 }
 

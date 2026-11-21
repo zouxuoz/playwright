@@ -192,7 +192,7 @@ export class CRPage implements PageDelegate {
   }
 
   async updateRequestInterception(): Promise<void> {
-    await this._networkManager.setRequestInterception(this._page.needsRequestInterception());
+    await this._networkManager.setRequestInterception(this._page.needsRequestInterception(), this._page.scopedRequestInterceptionGlobs());
   }
 
   async updateFileChooserInterception() {
@@ -438,17 +438,9 @@ class FrameSession {
   }
 
   async _initialize(hasUIWindow: boolean) {
-    if (!this._page.isStorageStatePage && hasUIWindow &&
+    const shouldGetWindowId = !this._page.isStorageStatePage && hasUIWindow &&
       !this._crPage._browserContext._browser.isClank() &&
-      !this._crPage._browserContext._options.noDefaultViewport) {
-      try {
-        const { windowId } = await this._client.send('Browser.getWindowForTarget');
-        this._windowId = windowId;
-      } catch {
-        // Some pages in Edge, like internal UIs, are mis-classified as "page", but do
-        // not actually have a browser window. That's fine, we won't resize them.
-      }
-    }
+      !this._crPage._browserContext._options.noDefaultViewport;
 
     if (this._isMainFrame() && hasUIWindow && !this._page.isStorageStatePage)
       startAutomaticVideoRecording(this._crPage._page);
@@ -509,6 +501,9 @@ class FrameSession {
         source: '',
         worldName: this._crPage.utilityWorldName,
       }),
+      this._client.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: '(()=>{const o=Element.prototype.attachShadow;if(!o)return;Element.prototype.attachShadow=function(i){const s=o.call(this,i);document.dispatchEvent(new CustomEvent("__pw_sr__"));return s;};})();',
+      }),
       this._crPage._networkManager.addSession(this._client, undefined, this._isMainFrame()),
       this._client.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }),
     ];
@@ -524,8 +519,24 @@ class FrameSession {
         promises.push(this._client.send('Page.setBypassCSP', { enabled: true }));
       if (options.ignoreHTTPSErrors || options.internalIgnoreHTTPSErrors)
         promises.push(this._client.send('Security.setIgnoreCertificateErrors', { ignore: true }));
-      if (this._isMainFrame())
-        promises.push(this._updateViewport());
+      if (this._isMainFrame()) {
+        promises.push((async () => {
+          if (shouldGetWindowId) {
+            try {
+              const { windowId } = await this._client.send('Browser.getWindowForTarget');
+              this._windowId = windowId;
+            } catch {
+              // Some pages in Edge, like internal UIs, are mis-classified as "page", but do
+              // not actually have a browser window. That's fine, we won't resize them.
+            }
+          }
+          await this._updateViewport();
+        })());
+      } else if (shouldGetWindowId) {
+        promises.push(this._client.send('Browser.getWindowForTarget').then(({ windowId }) => {
+          this._windowId = windowId;
+        }).catch(() => {}));
+      }
       if (options.hasTouch)
         promises.push(this._client.send('Emulation.setTouchEmulationEnabled', { enabled: true }));
       if (options.javaScriptEnabled === false)
